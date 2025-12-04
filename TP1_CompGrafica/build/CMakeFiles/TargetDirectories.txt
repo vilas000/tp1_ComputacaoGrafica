@@ -1,0 +1,3 @@
+/home/vilas000/TP1_CompGrafica/build/CMakeFiles/meu_app.dir
+/home/vilas000/TP1_CompGrafica/build/CMakeFiles/edit_cache.dir
+/home/vilas000/TP1_CompGrafica/build/CMakeFiles/rebuild_cache.dir
