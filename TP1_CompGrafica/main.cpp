@@ -140,12 +140,50 @@ int main(int argc, char* argv[]) {
     // Verificar se o usuário passou um arquivo
     std::string caminhoArquivo;
     if (argc > 1) {
-        caminhoArquivo = argv[1]; // Pega o argumento do terminal
-    } else {
-        std::cout << "Uso: ./meu_app <caminho_para_arquivo.vtk>" << std::endl;
+        int tamanhoArvore = atoi(argv[2]);
+        int step = atoi(argv[3]);
+        char caminhoBuilder[90] = "";
+        char aux[10];
+ 
+        switch (atoi(argv[1]))
+        {
+        case 2:
+            std::cout << "Tentando carregar árvore 2D de " << tamanhoArvore << " termos, no step " << step << std::endl;
+            strcat(caminhoBuilder, "../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_");
+            if (tamanhoArvore != 64 && tamanhoArvore != 128 && tamanhoArvore != 256) {
+                std::cout << "Tamanho de árvore inválido, tente algum desses valores: [64, 128, 256]" << std::endl;
+                return 1;
+            }
+            sprintf(aux,"%03d",tamanhoArvore);
+            strcat(caminhoBuilder, aux);
+            strcat(caminhoBuilder, "/tree2D_Nterm");
+            sprintf(aux,"%04d",tamanhoArvore);
+            strcat(caminhoBuilder, aux);
+            strcat(caminhoBuilder, "_step");
+            sprintf(aux,"%04d", step);
+            strcat(caminhoBuilder, aux);
+            strcat(caminhoBuilder, ".vtk");
+ 
+            caminhoArquivo = caminhoBuilder;
+            break;
+ 
+        case 3:
+            std::cout << "3D ainda não implementado" << std::endl;
+            std::cout << "Carregando arquivo padrao..." << std::endl;
+            caminhoArquivo = "../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_256/tree2D_Nterm0256_step0224.vtk";
+            break;
+ 
+        default:
+            std::cout << "Opção inválida de dimensões, tente '2' para 2D ou '3' para 3D" << std::endl;
+            return 1;
+            break;
+        }
+    }
+    else {
+        std::cout << "Uso: ./meu_app <nDimensoes> <Nterm> <step>" << std::endl;
         std::cout << "Carregando arquivo padrao..." << std::endl;
         // Caminho padrão (fallback)
-        caminhoArquivo = "/home/vilas000/Downloads/tree.vtk"; // Ajuste se necessário
+        caminhoArquivo = "../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_256/tree2D_Nterm0256_step0224.vtk"; // Ajuste se necessário
     }
 
     glfwInit();
