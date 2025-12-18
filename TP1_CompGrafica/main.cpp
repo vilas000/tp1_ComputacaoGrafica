@@ -311,11 +311,19 @@ int main(int argc, char** argv) {
         P[i].y = (P[i].y - center.y) / scale;
     }
 
-    // Calcular t por vértice (usar max dos segmentos incidentes para evitar buracos)
-    std::vector<float> pontoT(nPts, 0.0f);
+    // Calcular t por vértice como média dos segmentos incidentes (suaviza transições)
+    std::vector<float> pontoTSum(nPts, 0.0f);
+    std::vector<int> pontoTCount(nPts, 0);
     for (const auto &s : A.segmentos) {
-        pontoT[s.a] = std::max(pontoT[s.a], s.t);
-        pontoT[s.b] = std::max(pontoT[s.b], s.t);
+        pontoTSum[s.a] += s.t;
+        pontoTSum[s.b] += s.t;
+        pontoTCount[s.a]++;
+        pontoTCount[s.b]++;
+    }
+    std::vector<float> pontoT(nPts, 0.5f);
+    for (int i = 0; i < nPts; ++i) {
+        if (pontoTCount[i] > 0) pontoT[i] = pontoTSum[i] / pontoTCount[i];
+        else pontoT[i] = 0.5f;
     }
 
     // Espessura por vértice (em coordenadas normalizadas)
@@ -367,25 +375,26 @@ int main(int argc, char** argv) {
         vboData.insert(vboData.end(), {pos.x, pos.y, pos.z, col.r, col.g, col.b});
     };
 
-    // Use per-segment thickness and normal so each segment keeps consistent width
+    // Construir triângulos usando offsets por vértice (suaviza transições de espessura)
     for (const auto &s : A.segmentos) {
         glm::vec3 A0 = P[s.a];
         glm::vec3 B0 = P[s.b];
-        glm::vec2 d = glm::normalize(glm::vec2(B0 - A0));
-        glm::vec2 n = glm::vec2(-d.y, d.x);
 
-        // Espessura do próprio segmento (uniform ao longo do segmento)
-        float espSeg = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, s.t);
-        glm::vec2 off = n * espSeg;
+        // Use segment normal so the width along the segment is consistent
+        glm::vec2 segDir = glm::normalize(glm::vec2(B0 - A0));
+        glm::vec2 segN = glm::vec2(-segDir.y, segDir.x);
 
-        glm::vec3 v1(A0.x + off.x, A0.y + off.y, 0);
-        glm::vec3 v2(A0.x - off.x, A0.y - off.y, 0);
-        glm::vec3 v3(B0.x + off.x, B0.y + off.y, 0);
-        glm::vec3 v4(B0.x - off.x, B0.y - off.y, 0);
+        glm::vec2 offA = segN * pontoEsp[s.a];
+        glm::vec2 offB = segN * pontoEsp[s.b];
 
-        // Cor segue o raio do segmento
-        glm::vec3 cA = s.cor;
-        glm::vec3 cB = s.cor;
+        glm::vec3 v1(A0.x + offA.x, A0.y + offA.y, 0);
+        glm::vec3 v2(A0.x - offA.x, A0.y - offA.y, 0);
+        glm::vec3 v3(B0.x + offB.x, B0.y + offB.y, 0);
+        glm::vec3 v4(B0.x - offB.x, B0.y - offB.y, 0);
+
+        // Cor por vértice (suaviza transições de cor)
+        glm::vec3 cA = corPt[s.a];
+        glm::vec3 cB = corPt[s.b];
 
         push(v1, cA); push(v2, cA); push(v4, cB);
         push(v1, cA); push(v4, cB); push(v3, cB);
