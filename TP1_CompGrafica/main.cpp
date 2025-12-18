@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <filesystem>
+#include <regex>
 
 // GLM
 #include <glm/glm.hpp>
@@ -104,6 +106,87 @@ glm::vec3 gradiente(float t) {
     float hueRed = 0.0f;     // 0deg
     float hue = glm::mix(hueViolet, hueRed, t);
     return hsv2rgb(hue, 1.0f, 1.0f);
+}
+
+// Globals to control step reloading
+static int g_currentStep = 0;
+static int g_nDim = 2;
+static int g_tamanhoArvore = 256;
+static bool g_reloadRequested = false;
+static int g_requestedStep = 0;
+static int g_maxStep = 0;
+
+// Constrói o caminho do arquivo VTK baseado em dimensão, tamanho e step
+static std::string buildVTKPath(int nDim, int tamanhoArvore, int step) {
+    if (nDim == 2) {
+        char caminhoBuilder[128] = "";
+        char aux[16];
+        strcat(caminhoBuilder, "../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_");
+        sprintf(aux, "%03d", tamanhoArvore);
+        strcat(caminhoBuilder, aux);
+        strcat(caminhoBuilder, "/tree2D_Nterm");
+        sprintf(aux, "%04d", tamanhoArvore);
+        strcat(caminhoBuilder, aux);
+        strcat(caminhoBuilder, "_step");
+        sprintf(aux, "%04d", step);
+        strcat(caminhoBuilder, aux);
+        strcat(caminhoBuilder, ".vtk");
+        return std::string(caminhoBuilder);
+    }
+    // fallback
+    return std::string("../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_256/tree2D_Nterm0256_step0224.vtk");
+}
+
+// Detecta o maior step disponível na pasta correspondente
+static int detectMaxStep(int nDim, int tamanhoArvore) {
+    if (nDim != 2) return 0;
+    char folder[128] = "";
+    char aux[16];
+    strcat(folder, "../TP_CCO_Pacote_Dados/TP_CCO_Pacote_Dados/TP1_2D/Nterm_");
+    sprintf(aux, "%03d", tamanhoArvore);
+    strcat(folder, aux);
+
+    std::regex re(R"(tree2D_Nterm\d+_step(\d+)\.vtk)");
+    int maxStep = 0;
+    try {
+        for (const auto &entry : std::filesystem::directory_iterator(folder)) {
+            if (!entry.is_regular_file()) continue;
+            std::smatch m;
+            std::string name = entry.path().filename().string();
+            if (std::regex_search(name, m, re)) {
+                int s = std::stoi(m[1].str());
+                if (s > maxStep) maxStep = s;
+            }
+        }
+    } catch (...) {
+        return 0;
+    }
+    return maxStep;
+}
+
+// Key callback: j = previous step, k = next step
+static void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (action != GLFW_PRESS) return;
+    auto stepDelta = [](int tamanho) {
+        if (tamanho == 64) return 8;
+        if (tamanho == 128) return 16;
+        return 32; // default for 256 and others
+    };
+
+    int delta = stepDelta(g_tamanhoArvore);
+
+    if (key == GLFW_KEY_J) {
+        int next = g_currentStep - delta;
+        if (next < delta) next = delta; // menor step válido
+        if (g_maxStep > 0 && next > g_maxStep) next = g_maxStep;
+        g_requestedStep = next;
+        g_reloadRequested = true;
+    } else if (key == GLFW_KEY_K) {
+        int next = g_currentStep + delta;
+        if (g_maxStep > 0 && next > g_maxStep) next = g_maxStep;
+        g_requestedStep = next;
+        g_reloadRequested = true;
+    }
 }
 
 /* =========================================================
@@ -280,11 +363,25 @@ int main(int argc, char** argv) {
     GLFWwindow* win = glfwCreateWindow(1000, 800, "CCO Viewer", nullptr, nullptr);
     glfwMakeContextCurrent(win);
     glfwSetFramebufferSizeCallback(win, framebuffer_size_callback);
+    // register key callback for j/k stepping
+    glfwSetKeyCallback(win, key_callback);
 
     gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
 
     Arvore2D A = carregarVTK(arquivo);
     if (A.pontos.empty()) return -1;
+
+    // initialize globals for stepping if args provided
+    // try to parse argv values if present
+    if (argc > 1) {
+        g_nDim = atoi(argv[1]);
+        g_tamanhoArvore = atoi(argv[2]);
+        g_currentStep = atoi(argv[3]);
+        std::cout << "Current step: " << g_currentStep << std::endl;
+    }
+    // detect max available step for this tree (if possible)
+    g_maxStep = detectMaxStep(g_nDim, g_tamanhoArvore);
+    if (g_maxStep > 0) std::cout << "Max available step: " << g_maxStep << std::endl;
 
     std::vector<float> vboData;
 
@@ -420,6 +517,131 @@ int main(int argc, char** argv) {
 
     while (!glfwWindowShouldClose(win)) {
         processInput(win);
+
+        // handle reload request triggered by key callback
+        if (g_reloadRequested) {
+            g_reloadRequested = false;
+            int newStep = g_requestedStep;
+            std::string novoArquivo = buildVTKPath(g_nDim, g_tamanhoArvore, newStep);
+            Arvore2D An = carregarVTK(novoArquivo);
+                if (!An.pontos.empty()) {
+                A = std::move(An);
+                g_currentStep = newStep;
+                    std::cout << "Loaded step: " << g_currentStep << std::endl;
+
+                // rebuild VBO data (duplicate of build logic above)
+                std::vector<float> newVBO;
+
+                // recompute normalization
+                glm::vec2 minP(FLT_MAX), maxP(-FLT_MAX);
+                for (const auto &p : A.pontos) {
+                    minP.x = std::min(minP.x, p.pos.x);
+                    minP.y = std::min(minP.y, p.pos.y);
+                    maxP.x = std::max(maxP.x, p.pos.x);
+                    maxP.y = std::max(maxP.y, p.pos.y);
+                }
+                glm::vec2 center = (minP + maxP) * 0.5f;
+                float rangeX = maxP.x - minP.x;
+                float rangeY = maxP.y - minP.y;
+                float scale = std::max(rangeX, rangeY);
+                if (scale == 0.0f) scale = 1.0f;
+
+                int nPts = (int)A.pontos.size();
+                std::vector<glm::vec3> P(nPts);
+                for (int i = 0; i < nPts; ++i) {
+                    P[i] = A.pontos[i].pos;
+                    P[i].x = (P[i].x - center.x) / scale;
+                    P[i].y = (P[i].y - center.y) / scale;
+                }
+
+                // average t per vertex
+                std::vector<float> pontoTSum(nPts, 0.0f);
+                std::vector<int> pontoTCount(nPts, 0);
+                for (const auto &s : A.segmentos) {
+                    pontoTSum[s.a] += s.t;
+                    pontoTSum[s.b] += s.t;
+                    pontoTCount[s.a]++;
+                    pontoTCount[s.b]++;
+                }
+                std::vector<float> pontoT(nPts, 0.5f);
+                for (int i = 0; i < nPts; ++i) {
+                    if (pontoTCount[i] > 0) pontoT[i] = pontoTSum[i] / pontoTCount[i];
+                    else pontoT[i] = 0.5f;
+                }
+
+                std::vector<float> pontoEsp(nPts, 0.0f);
+                for (int i = 0; i < nPts; ++i)
+                    pontoEsp[i] = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, pontoT[i]);
+
+                std::vector<glm::vec2> dirSum(nPts, glm::vec2(0.0f));
+                std::vector<int> deg(nPts, 0);
+                for (const auto &s : A.segmentos) {
+                    glm::vec2 a = glm::vec2(P[s.a]);
+                    glm::vec2 b = glm::vec2(P[s.b]);
+                    glm::vec2 d = glm::normalize(b - a);
+                    dirSum[s.a] += d;
+                    dirSum[s.b] -= d;
+                    deg[s.a]++;
+                    deg[s.b]++;
+                }
+
+                std::vector<glm::vec2> normals(nPts, glm::vec2(1.0f, 0.0f));
+                for (int i = 0; i < nPts; ++i) {
+                    if (deg[i] > 0) {
+                        glm::vec2 s = dirSum[i];
+                        float len = glm::length(s);
+                        glm::vec2 d;
+                        if (len > 1e-6f) d = s / len;
+                        else {
+                            bool found = false;
+                            for (const auto &seg : A.segmentos) {
+                                if (seg.a == i) { glm::vec2 other = glm::vec2(P[seg.b]); d = glm::normalize(other - glm::vec2(P[i])); found = true; break; }
+                                if (seg.b == i) { glm::vec2 other = glm::vec2(P[seg.a]); d = glm::normalize(other - glm::vec2(P[i])); found = true; break; }
+                            }
+                            if (!found) d = glm::vec2(1.0f, 0.0f);
+                        }
+                        normals[i] = glm::vec2(-d.y, d.x);
+                    } else {
+                        normals[i] = glm::vec2(1.0f, 0.0f);
+                    }
+                }
+
+                std::vector<glm::vec3> corPt(nPts);
+                for (int i = 0; i < nPts; ++i) corPt[i] = gradiente(pontoT[i]);
+
+                auto pushNew = [&](const glm::vec3 &pos, const glm::vec3 &col) {
+                    newVBO.insert(newVBO.end(), {pos.x, pos.y, pos.z, col.r, col.g, col.b});
+                };
+
+                for (const auto &s : A.segmentos) {
+                    glm::vec3 A0 = P[s.a];
+                    glm::vec3 B0 = P[s.b];
+                    glm::vec2 segDir = glm::normalize(glm::vec2(B0 - A0));
+                    glm::vec2 segN = glm::vec2(-segDir.y, segDir.x);
+
+                    glm::vec2 offA = segN * pontoEsp[s.a];
+                    glm::vec2 offB = segN * pontoEsp[s.b];
+
+                    glm::vec3 v1(A0.x + offA.x, A0.y + offA.y, 0);
+                    glm::vec3 v2(A0.x - offA.x, A0.y - offA.y, 0);
+                    glm::vec3 v3(B0.x + offB.x, B0.y + offB.y, 0);
+                    glm::vec3 v4(B0.x - offB.x, B0.y - offB.y, 0);
+
+                    glm::vec3 cA = corPt[s.a];
+                    glm::vec3 cB = corPt[s.b];
+
+                    pushNew(v1, cA); pushNew(v2, cA); pushNew(v4, cB);
+                    pushNew(v1, cA); pushNew(v4, cB); pushNew(v3, cB);
+                }
+
+                // upload new buffer
+                glBindBuffer(GL_ARRAY_BUFFER, VBO);
+                glBufferData(GL_ARRAY_BUFFER, newVBO.size() * sizeof(float), newVBO.data(), GL_STATIC_DRAW);
+                vboData.swap(newVBO);
+            } else {
+                std::cerr << "Falha ao carregar step " << newStep << std::endl;
+            }
+        }
 
         int w, h;
         glfwGetFramebufferSize(win, &w, &h);
