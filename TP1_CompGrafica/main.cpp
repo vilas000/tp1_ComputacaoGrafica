@@ -7,6 +7,7 @@
 #include <string>
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 
 // GLM
 #include <glm/glm.hpp>
@@ -79,13 +80,30 @@ void framebuffer_size_callback(GLFWwindow*, int w, int h) {
 /* =========================================================
    GRADIENTE DE COR
    ========================================================= */
+// Converte HSV (h em [0,1]) para RGB
+static glm::vec3 hsv2rgb(float h, float s, float v) {
+    h = fmod(h, 1.0f);
+    if (h < 0.0f) h += 1.0f;
+    float c = v * s;
+    float x = c * (1.0f - std::fabs(fmod(h * 6.0f, 2.0f) - 1.0f));
+    float m = v - c;
+    float r = 0.0f, g = 0.0f, b = 0.0f;
+    if (h < 1.0f/6.0f) { r = c; g = x; b = 0; }
+    else if (h < 2.0f/6.0f) { r = x; g = c; b = 0; }
+    else if (h < 3.0f/6.0f) { r = 0; g = c; b = x; }
+    else if (h < 4.0f/6.0f) { r = 0; g = x; b = c; }
+    else if (h < 5.0f/6.0f) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+    return glm::vec3(r + m, g + m, b + m);
+}
+
 glm::vec3 gradiente(float t) {
     t = glm::clamp(t, 0.0f, 1.0f);
-    return {
-        1.5f * (1 - t) * t,
-        1.0f - std::abs(t - 0.5f) * 2.0f,
-        t
-    };
+    // Queremos: t=1.0 -> vermelho (hue=0.0), t=0.0 -> violeta/azul (~270deg -> hue=0.75)
+    float hueViolet = 0.75f; // ~270deg
+    float hueRed = 0.0f;     // 0deg
+    float hue = glm::mix(hueViolet, hueRed, t);
+    return hsv2rgb(hue, 1.0f, 1.0f);
 }
 
 /* =========================================================
@@ -270,32 +288,107 @@ int main(int argc, char** argv) {
 
     std::vector<float> vboData;
 
-    for (const auto& s : A.segmentos) {
-        glm::vec3 A0 = A.pontos[s.a].pos;
-        glm::vec3 B0 = A.pontos[s.b].pos;
+    // Normalizar/centralizar modelo para evitar espessuras visuais desproporcionais
+    glm::vec2 minP(FLT_MAX), maxP(-FLT_MAX);
+    for (const auto &p : A.pontos) {
+        minP.x = std::min(minP.x, p.pos.x);
+        minP.y = std::min(minP.y, p.pos.y);
+        maxP.x = std::max(maxP.x, p.pos.x);
+        maxP.y = std::max(maxP.y, p.pos.y);
+    }
+    glm::vec2 center = (minP + maxP) * 0.5f;
+    float rangeX = maxP.x - minP.x;
+    float rangeY = maxP.y - minP.y;
+    float scale = std::max(rangeX, rangeY);
+    if (scale == 0.0f) scale = 1.0f;
 
+    // Precompute normalized vertex positions
+    int nPts = (int)A.pontos.size();
+    std::vector<glm::vec3> P(nPts);
+    for (int i = 0; i < nPts; ++i) {
+        P[i] = A.pontos[i].pos;
+        P[i].x = (P[i].x - center.x) / scale;
+        P[i].y = (P[i].y - center.y) / scale;
+    }
+
+    // Calcular t por vértice (usar max dos segmentos incidentes para evitar buracos)
+    std::vector<float> pontoT(nPts, 0.0f);
+    for (const auto &s : A.segmentos) {
+        pontoT[s.a] = std::max(pontoT[s.a], s.t);
+        pontoT[s.b] = std::max(pontoT[s.b], s.t);
+    }
+
+    // Espessura por vértice (em coordenadas normalizadas)
+    std::vector<float> pontoEsp(nPts, 0.0f);
+    for (int i = 0; i < nPts; ++i)
+        pontoEsp[i] = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, pontoT[i]);
+
+    // Calcular normal média por vértice (somatório de direções dos segmentos incidentes)
+    std::vector<glm::vec2> dirSum(nPts, glm::vec2(0.0f));
+    std::vector<int> deg(nPts, 0);
+    for (const auto &s : A.segmentos) {
+        glm::vec2 a = glm::vec2(P[s.a]);
+        glm::vec2 b = glm::vec2(P[s.b]);
+        glm::vec2 d = glm::normalize(b - a);
+        dirSum[s.a] += d;
+        dirSum[s.b] -= d;
+        deg[s.a]++;
+        deg[s.b]++;
+    }
+
+    std::vector<glm::vec2> normals(nPts, glm::vec2(1.0f, 0.0f));
+    for (int i = 0; i < nPts; ++i) {
+        if (deg[i] > 0) {
+            glm::vec2 s = dirSum[i];
+            float len = glm::length(s);
+            glm::vec2 d;
+            if (len > 1e-6f) d = s / len;
+            else {
+                // fallback: find any incident segment direction
+                bool found = false;
+                for (const auto &seg : A.segmentos) {
+                    if (seg.a == i) { glm::vec2 other = glm::vec2(P[seg.b]); d = glm::normalize(other - glm::vec2(P[i])); found = true; break; }
+                    if (seg.b == i) { glm::vec2 other = glm::vec2(P[seg.a]); d = glm::normalize(other - glm::vec2(P[i])); found = true; break; }
+                }
+                if (!found) d = glm::vec2(1.0f, 0.0f);
+            }
+            normals[i] = glm::vec2(-d.y, d.x);
+        } else {
+            normals[i] = glm::vec2(1.0f, 0.0f);
+        }
+    }
+
+    // Cores por vértice, seguindo o raio variável
+    std::vector<glm::vec3> corPt(nPts);
+    for (int i = 0; i < nPts; ++i) corPt[i] = gradiente(pontoT[i]);
+
+    // Construir triângulos usando offsets por vértice (garante conectividade)
+    auto push = [&](const glm::vec3 &pos, const glm::vec3 &col) {
+        vboData.insert(vboData.end(), {pos.x, pos.y, pos.z, col.r, col.g, col.b});
+    };
+
+    // Use per-segment thickness and normal so each segment keeps consistent width
+    for (const auto &s : A.segmentos) {
+        glm::vec3 A0 = P[s.a];
+        glm::vec3 B0 = P[s.b];
         glm::vec2 d = glm::normalize(glm::vec2(B0 - A0));
-        glm::vec2 n(-d.y, d.x);
+        glm::vec2 n = glm::vec2(-d.y, d.x);
 
-        // Espessura real (usada apenas para cálculo de cor já feita antes)
-        float espReal = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, s.t);
-        // Usar uma espessura visual constante para todas as linhas;
-        // a espessura "real" será representada apenas pela cor (s.cor).
-        float espVisual = (ESPESSURA_MIN + ESPESSURA_MAX) * 0.5f;
-        glm::vec2 off = n * espVisual;
+        // Espessura do próprio segmento (uniform ao longo do segmento)
+        float espSeg = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, s.t);
+        glm::vec2 off = n * espSeg;
 
         glm::vec3 v1(A0.x + off.x, A0.y + off.y, 0);
         glm::vec3 v2(A0.x - off.x, A0.y - off.y, 0);
         glm::vec3 v3(B0.x + off.x, B0.y + off.y, 0);
         glm::vec3 v4(B0.x - off.x, B0.y - off.y, 0);
 
-        auto push = [&](glm::vec3 p) {
-            vboData.insert(vboData.end(), {p.x, p.y, p.z,
-                                           s.cor.r, s.cor.g, s.cor.b});
-        };
+        // Cor segue o raio do segmento
+        glm::vec3 cA = s.cor;
+        glm::vec3 cB = s.cor;
 
-        push(v1); push(v2); push(v4);
-        push(v1); push(v4); push(v3);
+        push(v1, cA); push(v2, cA); push(v4, cB);
+        push(v1, cA); push(v4, cB); push(v3, cB);
     }
 
     GLuint VAO, VBO;
