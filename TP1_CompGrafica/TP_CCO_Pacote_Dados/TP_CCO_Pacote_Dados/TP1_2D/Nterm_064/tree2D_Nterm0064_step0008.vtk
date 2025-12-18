@@ -1,6 +1,6 @@
 # vtk DataFile Version 3.0
 vtk output
-ASCII
+ASCII 
 DATASET POLYDATA
 POINTS  16  float
 0.0000000  0.0500000  0.0000000

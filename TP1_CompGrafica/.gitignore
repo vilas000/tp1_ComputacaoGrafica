@@ -1,0 +1,12 @@
+# Ignorar pastas de build e binários
+build/
+bin/
+out/
+*.o
+*.exe
+meu_app
+
+# Ignorar arquivos de sistema/IDE
+.vscode/
+.idea/
+.DS_Store
