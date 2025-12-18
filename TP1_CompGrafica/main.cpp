@@ -277,8 +277,12 @@ int main(int argc, char** argv) {
         glm::vec2 d = glm::normalize(glm::vec2(B0 - A0));
         glm::vec2 n(-d.y, d.x);
 
-        float esp = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, s.t);
-        glm::vec2 off = n * esp;
+        // Espessura real (usada apenas para cálculo de cor já feita antes)
+        float espReal = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, s.t);
+        // Usar uma espessura visual constante para todas as linhas;
+        // a espessura "real" será representada apenas pela cor (s.cor).
+        float espVisual = (ESPESSURA_MIN + ESPESSURA_MAX) * 0.5f;
+        glm::vec2 off = n * espVisual;
 
         glm::vec3 v1(A0.x + off.x, A0.y + off.y, 0);
         glm::vec3 v2(A0.x - off.x, A0.y - off.y, 0);
