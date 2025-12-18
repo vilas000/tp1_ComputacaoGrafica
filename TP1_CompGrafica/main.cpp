@@ -371,17 +371,14 @@ int main(int argc, char** argv) {
     Arvore2D A = carregarVTK(arquivo);
     if (A.pontos.empty()) return -1;
 
-    // initialize globals for stepping if args provided
-    // try to parse argv values if present
+    // inicializa variáveis globais para navegação por step se argumentos forem fornecidos na execução
     if (argc > 1) {
         g_nDim = atoi(argv[1]);
         g_tamanhoArvore = atoi(argv[2]);
         g_currentStep = atoi(argv[3]);
-        std::cout << "Current step: " << g_currentStep << std::endl;
     }
-    // detect max available step for this tree (if possible)
+    // Detecta o step máximo disponível para não exceder na navegacao
     g_maxStep = detectMaxStep(g_nDim, g_tamanhoArvore);
-    if (g_maxStep > 0) std::cout << "Max available step: " << g_maxStep << std::endl;
 
     std::vector<float> vboData;
 
@@ -449,7 +446,7 @@ int main(int argc, char** argv) {
             glm::vec2 d;
             if (len > 1e-6f) d = s / len;
             else {
-                // fallback: find any incident segment direction
+                // fallback: encontrar qualquer direção de segmento incidente
                 bool found = false;
                 for (const auto &seg : A.segmentos) {
                     if (seg.a == i) { glm::vec2 other = glm::vec2(P[seg.b]); d = glm::normalize(other - glm::vec2(P[i])); found = true; break; }
@@ -518,7 +515,7 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(win)) {
         processInput(win);
 
-        // handle reload request triggered by key callback
+        // se uma recarga foi solicitada pela callback de teclado
         if (g_reloadRequested) {
             g_reloadRequested = false;
             int newStep = g_requestedStep;
@@ -527,12 +524,13 @@ int main(int argc, char** argv) {
                 if (!An.pontos.empty()) {
                 A = std::move(An);
                 g_currentStep = newStep;
-                    std::cout << "Loaded step: " << g_currentStep << std::endl;
+                    std::cout << "Exibindo step: " << g_currentStep << std::endl;
 
-                // rebuild VBO data (duplicate of build logic above)
+
+                // reconstruir dados do VBO (duplicado da lógica de construção acima)
                 std::vector<float> newVBO;
 
-                // recompute normalization
+                // refaz a normalização/centralização
                 glm::vec2 minP(FLT_MAX), maxP(-FLT_MAX);
                 for (const auto &p : A.pontos) {
                     minP.x = std::min(minP.x, p.pos.x);
@@ -554,7 +552,7 @@ int main(int argc, char** argv) {
                     P[i].y = (P[i].y - center.y) / scale;
                 }
 
-                // average t per vertex
+                // Calcular t por vértice como média dos segmentos incidentes (suaviza transições)
                 std::vector<float> pontoTSum(nPts, 0.0f);
                 std::vector<int> pontoTCount(nPts, 0);
                 for (const auto &s : A.segmentos) {
@@ -634,7 +632,7 @@ int main(int argc, char** argv) {
                     pushNew(v1, cA); pushNew(v4, cB); pushNew(v3, cB);
                 }
 
-                // upload new buffer
+                // atualizar VBO OpenGL
                 glBindBuffer(GL_ARRAY_BUFFER, VBO);
                 glBufferData(GL_ARRAY_BUFFER, newVBO.size() * sizeof(float), newVBO.data(), GL_STATIC_DRAW);
                 vboData.swap(newVBO);
