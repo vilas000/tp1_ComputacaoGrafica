@@ -172,9 +172,9 @@ uniform float ambientStrength;
 uniform float specularStrength;
 uniform float shininess;
 
-vec3 computeLighting(vec3 fragPos, vec3 normal, vec3 baseColor) {
+vec3 computeLighting(vec3 fragPos, vec3 normal, vec3 baseColor, float ambient, float specular, float shine) {
     // Ambient
-    vec3 ambient = ambientStrength * lightColor;
+    vec3 ambientColor = ambient * lightColor;
     
     // Diffuse
     vec3 lightDir = normalize(lightPos - fragPos);
@@ -184,26 +184,26 @@ vec3 computeLighting(vec3 fragPos, vec3 normal, vec3 baseColor) {
     // Specular (Blinn-Phong)
     vec3 viewDir = normalize(viewPos - fragPos);
     vec3 halfwayDir = normalize(lightDir + viewDir);
-    float spec = pow(max(dot(normal, halfwayDir), 0.0), shininess);
-    vec3 specular = specularStrength * spec * lightColor;
+    float spec = pow(max(dot(normal, halfwayDir), 0.0), shine);
+    vec3 specularColor = specular * spec * lightColor;
     
-    return (ambient + diffuse + specular) * baseColor;
+    return (ambientColor + diffuse + specularColor) * baseColor;
 }
 
 void main() {
     vec3 finalColor;
     
     if (shadingMode == 0) {
-        // Flat: usar normal não interpolada (aproximação sem geometry shader)
+        // Flat: maior ambient, SEM specular (aparência mais chapada)
         vec3 norm = normalize(vNormal);
-        finalColor = computeLighting(vFragPos, norm, vColor);
+        finalColor = computeLighting(vFragPos, norm, vColor, 0.4, 0.0, 1.0);
     } else if (shadingMode == 1) {
         // Gouraud: usar iluminação interpolada do vertex shader
         finalColor = vLightColor;
     } else {
-        // Phong: computar iluminação por fragmento
+        // Phong: specular INTENSO, shininess alto (brilho evidente)
         vec3 norm = normalize(vNormal);
-        finalColor = computeLighting(vFragPos, norm, vColor);
+        finalColor = computeLighting(vFragPos, norm, vColor, 0.15, 1.2, 64.0);
     }
     
     FragColor = vec4(finalColor, 1.0);
