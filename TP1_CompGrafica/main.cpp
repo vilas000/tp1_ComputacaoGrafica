@@ -619,7 +619,11 @@ static void key_callback(GLFWwindow *window, int key, int scancode, int action, 
             return 8;
         if (tamanho == 128)
             return 16;
-        return 32; // default for 256 and others
+        if (tamanho == 256)
+            return 32;
+        if (tamanho == 512)
+            return 64;
+        return 32; // default fallback
     };
 
     int delta = stepDelta(g_tamanhoArvore);
