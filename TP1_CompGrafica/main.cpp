@@ -44,6 +44,13 @@ struct Arvore3D
     std::vector<Segmento> segmentos;
 };
 
+struct Vertice3D
+{
+    glm::vec3 pos;
+    glm::vec3 normal;
+    glm::vec3 cor;
+};
+
 /* =========================================================
    VARIÁVEIS GLOBAIS (CÂMERA ORBITAL E ILUMINAÇÃO)
    ========================================================= */
@@ -68,6 +75,14 @@ glm::vec3 g_lightColor(1.0f, 1.0f, 1.0f);
 float g_ambientStrength = 0.2f;
 float g_specularStrength = 0.5f;
 float g_shininess = 32.0f;
+
+// Seleção de segmentos
+int g_segmentoSelecionado = -1;           // -1 = nenhum selecionado
+glm::vec3 g_corSelecao(1.0f, 1.0f, 0.0f); // Amarelo para destacar
+
+// Árvore atual (para ray casting)
+Arvore3D *g_arvoreAtual = nullptr;
+std::vector<Vertice3D> *g_geometriaAtual = nullptr;
 
 // Conversão de coordenadas esféricas para cartesianas
 glm::vec3 sphericalToCartesian(float distance, float azimuth, float elevation)
@@ -203,6 +218,8 @@ void framebuffer_size_callback(GLFWwindow *, int w, int h)
     glViewport(0, 0, w, h);
 }
 
+void mouse_button_callback(GLFWwindow *window, int button, int action, int mods);
+
 void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
 {
     if (button == GLFW_MOUSE_BUTTON_LEFT)
@@ -215,6 +232,52 @@ void mouse_button_callback(GLFWwindow *window, int button, int action, int mods)
         else if (action == GLFW_RELEASE)
         {
             g_mousePressed = false;
+        }
+    }
+    else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS)
+    {
+        // Seleção de segmento com botão direito
+        double mouseX, mouseY;
+        glfwGetCursorPos(window, &mouseX, &mouseY);
+
+        int w, h;
+        glfwGetFramebufferSize(window, &w, &h);
+        float asp = (float)w / h;
+
+        glm::mat4 proj = glm::perspective(glm::radians(45.0f), asp, 0.01f, 100.0f);
+        glm::vec3 camPos = camera.target + sphericalToCartesian(camera.distance, camera.azimuth, camera.elevation);
+        glm::mat4 view = glm::lookAt(camPos, camera.target, glm::vec3(0.0f, 1.0f, 0.0f));
+
+        extern int findClickedSegment(double, double, int, int, const glm::mat4 &, const glm::mat4 &);
+        int segIdx = findClickedSegment(mouseX, mouseY, w, h, view, proj);
+
+        if (segIdx >= 0 && g_arvoreAtual)
+        {
+            g_segmentoSelecionado = segIdx;
+            const auto &seg = g_arvoreAtual->segmentos[segIdx];
+
+            // Imprimir propriedades
+            std::cout << "\n=== SEGMENTO SELECIONADO ===" << std::endl;
+            std::cout << "Índice: " << segIdx << std::endl;
+            std::cout << "Vértices: " << seg.a << " -> " << seg.b << std::endl;
+            std::cout << "Raio: " << seg.raio << std::endl;
+            std::cout << "Raio normalizado (t): " << seg.t << std::endl;
+
+            glm::vec3 p1 = g_arvoreAtual->pontos[seg.a].pos;
+            glm::vec3 p2 = g_arvoreAtual->pontos[seg.b].pos;
+            float comprimento = glm::length(p2 - p1);
+
+            std::cout << "Comprimento: " << comprimento << std::endl;
+            std::cout << "P1: (" << p1.x << ", " << p1.y << ", " << p1.z << ")" << std::endl;
+            std::cout << "P2: (" << p2.x << ", " << p2.y << ", " << p2.z << ")" << std::endl;
+            std::cout << "Cor: (" << seg.cor.r << ", " << seg.cor.g << ", " << seg.cor.b << ")" << std::endl;
+            std::cout << "===========================\n"
+                      << std::endl;
+        }
+        else
+        {
+            g_segmentoSelecionado = -1;
+            std::cout << "Nenhum segmento selecionado" << std::endl;
         }
     }
 }
@@ -242,6 +305,149 @@ void scroll_callback(GLFWwindow *window, double xoffset, double yoffset)
 {
     camera.distance *= (yoffset > 0) ? 0.9f : 1.1f;
     camera.distance = glm::clamp(camera.distance, 0.5f, 20.0f);
+}
+
+/* =========================================================
+   RAY CASTING PARA SELEÇÃO DE SEGMENTOS
+   ========================================================= */
+
+// Estrutura de Ray
+struct Ray
+{
+    glm::vec3 origin;
+    glm::vec3 direction;
+};
+
+// Gera ray a partir de coordenadas de tela
+Ray getRayFromScreen(double mouseX, double mouseY, int screenWidth, int screenHeight,
+                     const glm::mat4 &view, const glm::mat4 &projection)
+{
+    // Normalizar coordenadas de tela para NDC [-1, 1]
+    float x = (2.0f * mouseX) / screenWidth - 1.0f;
+    float y = 1.0f - (2.0f * mouseY) / screenHeight;
+
+    // Ray em clip space
+    glm::vec4 rayClip(x, y, -1.0f, 1.0f);
+
+    // Ray em eye space
+    glm::vec4 rayEye = glm::inverse(projection) * rayClip;
+    rayEye = glm::vec4(rayEye.x, rayEye.y, -1.0f, 0.0f);
+
+    // Ray em world space
+    glm::vec3 rayWorld = glm::vec3(glm::inverse(view) * rayEye);
+    rayWorld = glm::normalize(rayWorld);
+
+    // Posição da câmera em world space
+    glm::vec3 camPos = glm::vec3(glm::inverse(view) * glm::vec4(0, 0, 0, 1));
+
+    Ray ray;
+    ray.origin = camPos;
+    ray.direction = rayWorld;
+    return ray;
+}
+
+// Testa interseção ray-cilindro (simplificado: ray-segmento com threshold)
+bool rayCylinderIntersection(const Ray &ray, const glm::vec3 &p1, const glm::vec3 &p2,
+                             float radius, float &t, bool debug = false)
+{
+    // Algoritmo simplificado: distância do ray ao segmento
+    glm::vec3 segDir = p2 - p1;
+    float segLength = glm::length(segDir);
+    if (segLength < 1e-6f)
+        return false;
+    segDir /= segLength;
+
+    glm::vec3 rayToSeg = p1 - ray.origin;
+
+    // Parâmetros para calcular distância mínima
+    float a = glm::dot(ray.direction, ray.direction);
+    float b = glm::dot(ray.direction, segDir);
+    float c = glm::dot(segDir, segDir);
+    float d = glm::dot(ray.direction, rayToSeg);
+    float e = glm::dot(segDir, rayToSeg);
+
+    float denom = a * c - b * b;
+    if (std::abs(denom) < 1e-6f)
+        return false;
+
+    // FIX: Correção do sinal para s e tSeg
+    float s = (c * d - b * e) / denom;    // Estava: (b * e - c * d) / denom
+    float tSeg = (b * d - a * e) / denom; // Estava: (a * e - b * d) / denom
+    {
+        t = s;
+        return true;
+    }
+
+    return false;
+}
+
+// Encontra segmento clicado
+int findClickedSegment(double mouseX, double mouseY, int screenWidth, int screenHeight,
+                       const glm::mat4 &view, const glm::mat4 &projection)
+{
+    if (!g_arvoreAtual || !g_geometriaAtual)
+        return -1;
+
+    Ray ray = getRayFromScreen(mouseX, mouseY, screenWidth, screenHeight, view, projection);
+
+    float closestT = FLT_MAX;
+    int closestSegment = -1;
+
+    // Normalizar pontos (mesmo processo do buildGeometry)
+    glm::vec3 minP(FLT_MAX), maxP(-FLT_MAX);
+    for (const auto &p : g_arvoreAtual->pontos)
+    {
+        minP = glm::min(minP, p.pos);
+        maxP = glm::max(maxP, p.pos);
+    }
+    glm::vec3 center = (minP + maxP) * 0.5f;
+    glm::vec3 range = maxP - minP;
+    float scale = glm::max(glm::max(range.x, range.y), range.z);
+    if (scale == 0.0f)
+        scale = 1.0f;
+
+    int nPts = (int)g_arvoreAtual->pontos.size();
+    std::vector<glm::vec3> P(nPts);
+    for (int i = 0; i < nPts; ++i)
+    {
+        P[i] = (g_arvoreAtual->pontos[i].pos - center) / scale;
+    }
+
+    // Calcular raios
+    std::vector<float> pontoTSum(nPts, 0.0f);
+    std::vector<int> pontoTCount(nPts, 0);
+    for (const auto &s : g_arvoreAtual->segmentos)
+    {
+        pontoTSum[s.a] += s.t;
+        pontoTSum[s.b] += s.t;
+        pontoTCount[s.a]++;
+        pontoTCount[s.b]++;
+    }
+    std::vector<float> pontoRaio(nPts, 0.0f);
+    for (int i = 0; i < nPts; ++i)
+    {
+        float tVal = (pontoTCount[i] > 0) ? pontoTSum[i] / pontoTCount[i] : 0.5f;
+        pontoRaio[i] = glm::mix(ESPESSURA_MIN, ESPESSURA_MAX, tVal);
+    }
+
+    // Testar cada segmento
+    for (size_t i = 0; i < g_arvoreAtual->segmentos.size(); ++i)
+    {
+        const auto &seg = g_arvoreAtual->segmentos[i];
+        float avgRadius = (pontoRaio[seg.a] + pontoRaio[seg.b]) * 0.5f;
+
+        float tVal;
+        if (rayCylinderIntersection(ray, P[seg.a], P[seg.b], avgRadius, tVal))
+        {
+            if (tVal < closestT)
+            {
+                closestT = tVal;
+                closestSegment = i;
+            }
+        }
+    }
+
+    return closestSegment;
 }
 
 /* =========================================================
@@ -441,12 +647,6 @@ static void key_callback(GLFWwindow *window, int key, int scancode, int action, 
 /* =========================================================
    GERAÇÃO DE GEOMETRIA DE CILINDRO
    ========================================================= */
-struct Vertice3D
-{
-    glm::vec3 pos;
-    glm::vec3 normal;
-    glm::vec3 cor;
-};
 
 // Gera geometria para um cilindro entre dois pontos com tampas
 void gerarCilindro(const glm::vec3 &p1, const glm::vec3 &p2,
@@ -686,6 +886,7 @@ void processInput(GLFWwindow *w)
         {
             g_shadingMode = 0; // Flat
             lastModeSwitch = currentTime;
+            std::cout << "Modo alterado para: FLAT" << std::endl;
             const char *modes[] = {"Flat", "Gouraud", "Phong"};
             std::string title = std::string("CCO Viewer - ") + modes[g_shadingMode];
             glfwSetWindowTitle(w, title.c_str());
@@ -694,6 +895,7 @@ void processInput(GLFWwindow *w)
         {
             g_shadingMode = 1; // Gouraud
             lastModeSwitch = currentTime;
+            std::cout << "Modo alterado para: GOURAUD" << std::endl;
             const char *modes[] = {"Flat", "Gouraud", "Phong"};
             std::string title = std::string("CCO Viewer - ") + modes[g_shadingMode];
             glfwSetWindowTitle(w, title.c_str());
@@ -702,6 +904,7 @@ void processInput(GLFWwindow *w)
         {
             g_shadingMode = 2; // Phong
             lastModeSwitch = currentTime;
+            std::cout << "Modo alterado para: PHONG" << std::endl;
             const char *modes[] = {"Flat", "Gouraud", "Phong"};
             std::string title = std::string("CCO Viewer - ") + modes[g_shadingMode];
             glfwSetWindowTitle(w, title.c_str());
@@ -805,6 +1008,9 @@ int main(int argc, char **argv)
     if (A.pontos.empty())
         return -1;
 
+    // Configurar ponteiros globais para ray casting
+    g_arvoreAtual = &A;
+
     // inicializa variáveis globais para navegação por step se argumentos forem fornecidos na execução
     if (argc > 1)
     {
@@ -882,6 +1088,9 @@ int main(int argc, char **argv)
     };
 
     std::vector<Vertice3D> geometria = buildGeometry(A);
+
+    // Configurar ponteiro global para ray casting
+    g_geometriaAtual = &geometria;
 
     // Converter para VBO flat (9 floats por vértice)
     std::vector<float> vboData;
@@ -963,6 +1172,9 @@ int main(int argc, char **argv)
                 glBufferData(GL_ARRAY_BUFFER, newVBO.size() * sizeof(float), newVBO.data(), GL_STATIC_DRAW);
                 vboData = std::move(newVBO);
                 geometria = std::move(novaGeometria);
+
+                // Atualizar ponteiro global para ray casting
+                g_geometriaAtual = &geometria;
             }
             else
             {
